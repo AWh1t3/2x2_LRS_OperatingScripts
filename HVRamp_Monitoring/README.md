@@ -9,3 +9,8 @@ be mobile during a HV ramp rather than tied to an unchangeable monitoring script
 
 Scripts for ramp monitoring used during Run 2 will be saved in this directory, and improved on in anticipation 
 of later runs. 
+
+Ramp_monitoring.ipynb: 
+
+This script takes nearline flow files with raw waveforms and looks at irregularities in trigger rates.
+It provides the opportunity to quickly pinpoint regions of instability and inspect individual or sum waveoforms.
