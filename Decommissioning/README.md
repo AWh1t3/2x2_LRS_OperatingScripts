@@ -7,6 +7,9 @@ The latter portion of that mission is difficult: cracks in the ArCLight panels c
 of any size, of any length, and in any direction. We know we run the risk of cracking, but
 we have yet to study it in action. 
 
+Decommissioning Step 1: 
+- Use LowLevel_Commissioning/Check_B_and_DC.ipynb to get baseline and dead/alive status
+
 Compare_Trap_TriggerRates.ipynb:
 
 
