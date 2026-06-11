@@ -1,5 +1,7 @@
 ## Nearline Development ##
 
+This directory is intended for in-progress work on the Run 3 nearlines, not the storage or explanation of finished products. 
+
 1. Baseline Plots from Run 2: keep
 
 2. Alive/Dead Plots from Run 2: keep
