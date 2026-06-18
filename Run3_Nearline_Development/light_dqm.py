@@ -216,7 +216,7 @@ def get_waveform_info(waveform, units='ADC16', mask=None, ths=None):
         # mask is expected to be a list/array of event indices
         waveform = waveform[mask]
     # check if the waveform is clipped
-    clipped = np.any(waveform >= (adc14_max-1)*adc14_16, axis=-1)
+    #clipped = np.any(waveform >= (adc14_max-1)*adc14_16, axis=-1)
     # define units
     if units == 'ADC14':
         waveform = waveform / adc14_16
@@ -231,12 +231,12 @@ def get_waveform_info(waveform, units='ADC16', mask=None, ths=None):
     # subtract the baseline from the waveform
     max_value = np.max(waveform - baseline[:, :, :, np.newaxis], axis=3)
     # check for negative values below ptps
-    negs = np.any(waveform - baseline[:, :, :, np.newaxis] < -ths[np.newaxis, :, np.newaxis, np.newaxis], axis=-1)
+    #negs = np.any(waveform - baseline[:, :, :, np.newaxis] < -ths[np.newaxis, :, np.newaxis, np.newaxis], axis=-1)
     # wvfms of specified events
     wvfms = waveform[:, :, :, :]
 
     # return the baseline, max value, and clipped status
-    return wvfms, noise, baseline, max_value, clipped, negs
+    return wvfms, noise, baseline, max_value#, clipped, negs
 
 
 ### GRAFANA PLOTS ###
@@ -492,6 +492,33 @@ def plot_baseline_mask(baseline_mask, channel_status=None, times=None,
 
 ### DQM PLOTS ###
 
+def tag_large_events(WVFM_ARRAY, ADC_LIST=None, TICKS=600):
+
+    large_event_wvfm = np.zeros((8,64,TICKS), dtype=np.int64)
+    SIPM_CHANNELS = ([4,5,6,7,8,9] + \
+                     [10,11,12,13,14,15] + \
+                     [20,21,22,23,24,25] + \
+                     [26,27,28,29,30,31] + \
+                     [36,37,38,39,40,41] + \
+                     [42,43,44,45,46,47] + \
+                     [52,53,54,55,56,57] + \
+                     [58,59,60,61,62,63])
+
+    if ADC_LIST is None:
+        ADC_LIST = [0,1,2,3,4,5,6,7]
+    for adc in ADC_LIST:
+        CHANNEL_LIST = [6,10,24,26,36,42,52,58]
+        for ch in CHANNEL_LIST:
+            mask = np.argmax(np.max(WVFM_ARRAY[:, adc, ch, :TICKS], axis=-1))
+            #max_value = np.max(WVFM_ARRAY[mask, adc, ch, :], axis=-1)
+
+            for e_ch in range(6):
+                large_event_wvfm[adc, ch+e_ch, :] += np.array(WVFM_ARRAY[mask, adc, ch+e_ch, :TICKS]/4, dtype=np.int16)
+            del mask
+            #del max_value
+
+    return large_event_wvfm
+
 # Get the sum waveform for a given event and units
 def get_sum_waveform(waveform, units='ADC16', mask=None, clip=True):
     # waveform shape: (n_events, n_adcs, n_channels, n_samples)
@@ -512,7 +539,7 @@ def get_sum_waveform(waveform, units='ADC16', mask=None, clip=True):
 
 
 # Plot the sum waveform per EPCB for a single event
-def plot_sum_waveform(waveform, units='ADC16', i_evt=0, output_name='sum_waveform.pdf'):
+def plot_sum_waveform(waveform, units='ADC16', output_name='sum_waveform.pdf'):
     # waveform shape: (n_events, n_adcs, n_channels, n_samples)
     n_epcbs = int(len(channels) // 6)
     n_adcs = waveform.shape[0]
@@ -541,7 +568,8 @@ def plot_sum_waveform(waveform, units='ADC16', i_evt=0, output_name='sum_wavefor
             # plot total
             sum_wvfm = get_sum_waveform(epcb_waveform, units=units)
             # set title
-            axes[idx, tt_idx].set_title(f'Event {i_evt} - Non-beam trigger timing')
+            #axes[idx, tt_idx].set_title(f'Event {i_evt} - Non-beam trigger timing')
+            axes[idx, tt_idx].set_title(f'Sanity Check: IN-PROGRESS')
             axes[idx, tt_idx].plot(sum_wvfm, color='black', alpha=0.5, label='Sum ADC')
             axes[idx, tt_idx].set_title(f'ADC {i} - EPCB {j} summed waveforms')
             axes[idx, tt_idx].set_ylabel(f'{units} counts')
@@ -634,6 +662,123 @@ def plot_noises(prev_noises, noises, i_evt, mask_inactive=True,
         plt.close()
     return medians, lowers, uppers
 
+#Check for HV instabilities
+def get_fprompt_estimate(WVFM_ARRAY, ARRIVAL_TICK=77, THRESHOLD=600):
+
+    NUM_EVENTS = np.shape(WVFM_ARRAY)[0]
+    N_ADCS = np.shape(WVFM_ARRAY)[1]
+
+    save_array = np.zeros((NUM_EVENTS, N_ADCS))   
+
+    fast_max = WVFM_ARRAY[:,:,:,ARRIVAL_TICK:(ARRIVAL_TICK+14)].max(axis=-1)
+    slow_max = WVFM_ARRAY[:,:,:,(ARRIVAL_TICK+14):(ARRIVAL_TICK+201)].max(axis=-1)
+    max_mask = (fast_max > slow_max) & (fast_max > THRESHOLD//4)
+    del slow_max
+    del fast_max
+    # Integrate the fast component
+    fast_int = WVFM_ARRAY[:,:,:,ARRIVAL_TICK:(ARRIVAL_TICK+14)].sum(axis=-1)
+    # Integrate the total signal
+    total_int = WVFM_ARRAY[:,:,:,ARRIVAL_TICK:(ARRIVAL_TICK+201)].sum(axis=-1)
+    #del WVFM_ARRAY
+    # build the fprompt array
+    fprompt = fast_int / total_int
+    del fast_int
+    del total_int
+
+    fprompt_mask = ((fprompt > 0) & (fprompt < 0.25)) & (max_mask==1)
+    save_array[:,:] = (fprompt_mask).sum(axis=-1)
+
+    del fprompt
+    del fprompt_mask
+    del max_mask
+
+    return save_array
+
+# Plot the count of HV instability occurrences
+def plot_fprompt_rates(HVINST_ARRAY, FPROMPT_THD=20, FILE_LENGTH=300, MULT=4, N_ADCS=8, output_name='hv_instabilities_01.pdf'):
+    fig, ax = plt.subplots(figsize=(12,4))
+    x_array = np.arange(0, FILE_LENGTH, np.float32(FILE_LENGTH/(np.shape(HVINST_ARRAY)[0])))
+    if len(x_array) > np.shape(HVINST_ARRAY)[0]:
+        x_array = x_array[1:]
+    elif len(x_array) < np.shape(HVINST_ARRAY)[0]:
+        HVINST_ARRAY = HVINST_ARRAY[:len(x_array),:,:]
+        
+    color_array = ['#733957', '#A3672C', '#C3A34B',
+                '#D6D893', '#B4DEC6', '#74BBCD',
+                '#4F88B9', '#5C538B']
+
+    style_array = [':', '-', ':',
+                '-', ':', '-',
+                ':', '-']
+
+    for i in range(N_ADCS):
+        ax.plot(x_array, np.cumsum(HVINST_ARRAY[:,i]), color=color_array[i], linestyle=style_array[i], label=f'ADC {i}', linewidth=2)
+    #print('End Game Sums:', (HVINST_ARRAY.sum(axis=0)*MULT)//FILE_LENGTH, ' Hz')
+    ax.axhline(y=FPROMPT_THD, color='crimson', linestyle='--', label='Limit', linewidth=2)
+    ax.axhspan(ymin=FPROMPT_THD, ymax=1500, color='crimson', alpha=0.2)
+    ax.legend(loc='upper right', ncols=3, fontsize=12)
+    ax.set_ylim(0.5, 1500)
+    ax.set_yscale('log')
+    ax.set_xlim(x_array[0]-2,x_array[-1]+2)
+    ax.set_xlabel('Seconds Into File [s]', fontsize=14)
+    ax.set_ylabel('Cumulative Irregularities', fontsize=14)
+    textstr = f'If Any ADC Exceeds Limit, Screenshot & Send to @2x2_lrs_expert on Slack'
+    #textstr = f'Particle Type: protons\n Vertex in 2x2'
+    #props = dict(boxstyle='round', facecolor='white', edgecolor='')
+    ax.text(
+        0.5, 0.55, textstr,
+        transform=ax.transAxes,
+        fontsize=14,
+        verticalalignment='top',
+        horizontalalignment='center',
+        color='maroon'
+    )
+    #plt.text(x=5,  y=8, s='If Any ADC Exceeds Limit, Screenshot & Send to @2x2_lrs_expert on Slack', rotation=0, verticalalignment='center', fontsize=12, color='crimson')
+    plt.title(f'Channels with Fprompt [0, 0.25] Per File', fontsize=16, loc='left', y=0.88, x=0.02)
+    plt.tight_layout()
+    # save as pdf
+    output_pdf = f"{args.tmp_dir}/{output_name}"
+    with PdfPages(output_pdf) as pdf:
+        pdf.savefig()
+        plt.close()
+
+    return
+
+# Plot the time of HV instability occurrences
+def plot_fprompt_occurrences(HVINST_ARRAY, FILE_LENGTH=300, N_ADCS=8, output_name='hv_instabilities_02.pdf'):
+    fig, ax = plt.subplots(figsize=(12,3))
+    x_array = np.arange(0, FILE_LENGTH, np.float32(FILE_LENGTH/(np.shape(HVINST_ARRAY)[0])))
+    if len(x_array) > np.shape(HVINST_ARRAY)[0]:
+        x_array = x_array[1:]
+    elif len(x_array) < np.shape(HVINST_ARRAY)[0]:
+        HVINST_ARRAY = HVINST_ARRAY[:len(x_array),:,:]
+        
+    color_array = ['#733957', '#A3672C', '#C3A34B',
+                '#D6D893', '#B4DEC6', '#74BBCD',
+                '#4F88B9', '#5C538B']
+
+    style_array = [':', '-', ':',
+                '-', ':', '-',
+                ':', '-']
+
+    for i in range(N_ADCS):
+        ax.plot(x_array, HVINST_ARRAY[:,i], color=color_array[i], linestyle=style_array[i], label=f'ADC {i}', linewidth=2)
+    #ax.axhline(y=6, color='crimson', linestyle='--', label='Limit', linewidth=2)
+    #ax.axhspan(ymin=6, ymax=49, color='crimson', alpha=0.2)
+    ax.legend(loc='upper right', ncols=3, fontsize=12)
+    ax.set_ylim(-1, 12)
+    ax.set_xlim(x_array[0]-2,x_array[-1]+2)
+    ax.set_xlabel('Seconds Into File [s]', fontsize=14)
+    ax.set_ylabel('Irregular Channels', fontsize=14)
+    plt.title(f'Channels with Fprompt [0, 0.25] Per File', fontsize=16, loc='left', y=0.80, x=0.02)
+    plt.tight_layout()
+    # save as pdf
+    output_pdf = f"{args.tmp_dir}/{output_name}"
+    with PdfPages(output_pdf) as pdf:
+        pdf.savefig()
+        plt.close()
+
+    return
 
 # Plot baselines for each ADC channel
 def plot_baselines(prev_baselines, baselines, i_evt, mask_inactive=True,
@@ -1091,7 +1236,7 @@ def main():
             file = h5py.File(filename, 'r')
             print(f"File opened successfully: {filename}")
 
-            size_bytes = os.path.getsize(input_file)
+            size_bytes = os.path.getsize(filename)
             size_gb = size_bytes / (1024 ** 3)
             print(f"File size: {size_gb:.2f} GB")
 
@@ -1129,10 +1274,13 @@ def main():
         print(f"Total Number of Beam Events: {np.sum(beam_mask):.2f} events")
         print(f"Total Number of Off-Beam Events: {np.sum(beam_mask==0):.2f} events")
         print(f"Beam Trigger Rate: {(np.sum(beam_mask)/file_length):.2f} Hz")
+        beam_trigger_rate = (np.sum(beam_mask)/file_length)
         print(f"Self-Trigger Rate: {(np.sum(beam_mask==0)/file_length):.2f} Hz")
-        smallest_time_differences = time_differences[time_differences/1e3 < 5e5]
+        self_trigger_rate = (np.sum(beam_mask==0)/file_length)
+        #smallest_time_differences = time_differences[time_differences/1e3 < 5e5]
+        smallest_time_diff = np.min(time_differences/1e3)
         print(f"Minimum Dead Time: {(np.min(time_differences/1e3)):.2f} μs")
-        del beam_mask, timestamps, time_differences, smallest_time_differences
+        del beam_mask, timestamps, time_differences
 
         # files for comparison
         if args.ncomp == -1 or args.ncomp > i_file:
@@ -1155,21 +1303,21 @@ def main():
         sel_idx = np.linspace(0, nevents_total - 1, evts_to_process, dtype=int)
 
         # define datasets for beam trigger type
-        beam_mask = sel_idx[file["light/events/data"]['trig_type'][::MULT] == 1]
-        beam_wvfms, beam_noises, beam_baselines, beam_max_values = get_waveform_info(
-            file["light/wvfm/data"]['samples'][::MULT, :, :], args.units, mask=beam_mask, ths=ptps)
-        nbeam_evts = beam_wvfms.shape[0]
+        #beam_mask = sel_idx[file["light/events/data"]['trig_type'][::MULT] == 1]
+        #beam_wvfms, beam_noises, beam_baselines, beam_max_values = get_waveform_info(
+        #    file["light/wvfm/data"]['samples'][::MULT, :, :], args.units, mask=beam_mask, ths=ptps)
+        #nbeam_evts = beam_wvfms.shape[0]
 
 
         # define datasets for self-trigger type
-        strig_mask = sel_idx[file["light/events/data"]['trig_type'][::MULT] == 0]
-        strig_wvfms, strig_noises, strig_baselines, strig_max_values, strig_clipped, strig_negs = get_waveform_info(
-            file["light/wvfm/data"]['samples'][::MULT,:,:,:], args.units, mask=strig_mask, ths=ptps)
-        nstrig_evts = strig_wvfms.shape[0]
+        #strig_mask = sel_idx[file["light/events/data"]['trig_type'][::MULT] == 0]
+        #strig_wvfms, strig_noises, strig_baselines, strig_max_values = get_waveform_info(
+        #    file["light/wvfm/data"]['samples'][::MULT,:,:,:], args.units, mask=strig_mask, ths=ptps)
+        #nstrig_evts = strig_wvfms.shape[0]
 
 
         # define datasets for all events
-        wvfms, noises, baselines, max_values, clipped, negs = get_waveform_info(
+        wvfms, noises, baselines, max_values = get_waveform_info(
             file["light/wvfm/data"]['samples'][::MULT,:,:,:], args.units, mask=sel_idx, ths=ptps)
         nevts = wvfms.shape[0]
 
@@ -1177,48 +1325,71 @@ def main():
         # WORK IN PROGRESS TO TRACK RATIO OF BEAM TO SELF-TRIG EVENTS #
         ###############################################################
 
-        print(f"Waveform info extracted for file: {filename}")
-        print("    Total number of events:", wvfms.shape[0])
-        print("    Number of beam events:", beam_wvfms.shape[0],
-              (f"{100*beam_wvfms.shape[0]/wvfms.shape[0]:.1f}%" if wvfms.shape[0]>0 else "N/A"))
-        print("    Number of self-trigger events:", strig_wvfms.shape[0],
-              (f"{100*strig_wvfms.shape[0]/wvfms.shape[0]:.1f}%" if wvfms.shape[0]>0 else "N/A"))
+        #print(f"Waveform info extracted for file: {filename}")
+        #print("    Total number of events:", wvfms.shape[0])
+        #print("    Number of beam events:", beam_wvfms.shape[0],
+        #      (f"{100*beam_wvfms.shape[0]/wvfms.shape[0]:.1f}%" if wvfms.shape[0]>0 else "N/A"))
+        #print("    Number of self-trigger events:", strig_wvfms.shape[0],
+        #      (f"{100*strig_wvfms.shape[0]/wvfms.shape[0]:.1f}%" if wvfms.shape[0]>0 else "N/A"))
 
 
         ### DQM PLOTS ###
 
         # identify event with largest total integral
-        integrals = np.sum(wvfms, axis=(1,2,3))
-        max_integral_evt = np.argmax(integrals)
+        #integrals = np.sum(wvfms, axis=(1,2,3))
+        #max_integral_evt = np.argmax(integrals)
 
         # number of samples over noise threshold
-        samples_over_th = wvfms > ptps_16[np.newaxis, :, np.newaxis, np.newaxis]
-        nsamples_over_th = np.sum(samples_over_th, axis=(1,2,3))
-        max_nsamples_evt = np.argmax(nsamples_over_th)
+        #samples_over_th = wvfms > ptps_16[np.newaxis, :, np.newaxis, np.newaxis]
+        #nsamples_over_th = np.sum(samples_over_th, axis=(1,2,3))
+        #max_nsamples_evt = np.argmax(nsamples_over_th)
 
         # get event number containing the wvfm with the largest diff between consecutive samples
-        diffs = np.abs(np.diff(wvfms, axis=-1))
-        max_diffs = np.max(diffs, axis=(1,2,3))
-        max_diff_evt = np.argmax(max_diffs)
+        #diffs = np.abs(np.diff(wvfms, axis=-1))
+        #max_diffs = np.max(diffs, axis=(1,2,3))
+        #max_diff_evt = np.argmax(max_diffs)
 
         ####################################################################
         # WIP: find a way to make this a tag for sparking / discharge events
         #evts = np.array([max_integral_evt])
         #evts = np.array([max_nsamples_evt])
-        evts = np.array([max_diff_evt])
+        #evts = np.array([max_diff_evt])
         ####################################################################
 
         # sum waveform baselined
+        large_event_array = tag_large_events(WVFM_ARRAY=(wvfms - baselines[:, :, :, np.newaxis]) , ADC_LIST=None, TICKS=np.shape(wvfms)[-1])
         try:
-            for evt in evts:
-                plot_sum_waveform(wvfms - baselines[:, :, :, np.newaxis],
-                          args.units, i_evt=evt, output_name='plot1_sumwvfm.pdf')
+            #for evt in evts:
+            plot_sum_waveform(large_event_array, args.units, output_name='plot1_sumwvfm.pdf')
             print(f"Sum waveform plotted for file: {filename}")
         except Exception as e:
 
             placeholder_pdf(args.tmp_dir, 'plot1_sumwvfm.pdf',
                             "Failed to plot summed waveforms: plot1_sumwvfm.pdf")
 
+            traceback.print_exc()
+
+        # HV instability check:
+        low_fprompt_array = get_fprompt_estimate(WVFM_ARRAY=(wvfms - baselines[:, :, :, np.newaxis])/4, ARRIVAL_TICK=77, THRESHOLD=600)
+        max_fprompt_array = (np.sum(low_fprompt_array, axis=0)*MULT) / file_length
+        try:
+            #for evt in evts:
+            plot_fprompt_rates(HVINST_ARRAY=low_fprompt_array, FPROMPT_THD=15, FILE_LENGTH=np.round(file_length,2), MULT=MULT, output_name='plot6_hv_instabilities.pdf')
+            print(f"HV Instability Rate plotted for file: {filename}")
+        except Exception as e:
+
+            placeholder_pdf(args.tmp_dir, 'plot6_hv_instabilities.pdf',
+                            "Failed to plot HV instability rates: plot6_hv_instabilities.pdf")
+            traceback.print_exc()
+
+        try:
+            #for evt in evts:
+            plot_fprompt_occurrences(HVINST_ARRAY=low_fprompt_array, FILE_LENGTH=np.round(file_length,2), output_name='plot7_hv_instabilities.pdf')
+            print(f"HV Instability Time plotted for file: {filename}")
+        except Exception as e:
+
+            placeholder_pdf(args.tmp_dir, 'plot7_hv_instabilities.pdf',
+                            "Failed to plot HV instability occurences: plot7_hv_instabilities.pdf")
             traceback.print_exc()
 
         # noise power spectra and rois
@@ -1274,7 +1445,7 @@ def main():
             ) if i_file - args.start_run > 0 else None
             # Plot noises
             noise_c, noise_l, noise_u = plot_noises(prev_noises,
-                strig_noises, i_evt=np.arange(0, strig_baselines.shape[0], 1),
+                noises, i_evt=np.arange(0, baselines.shape[0], 1),
                 mask_inactive=False, output_name='plot4_noises.pdf'
             )
             # write noises
@@ -1299,7 +1470,7 @@ def main():
             ) if i_file - args.start_run > 0 else None
             # Plot baselines
             bline_c, bline_l, bline_u = plot_baselines(prev_baselines,
-                strig_baselines, i_evt=np.arange(0, strig_baselines.shape[0], 1),
+                baselines, i_evt=np.arange(0, baselines.shape[0], 1),
                 mask_inactive=False, output_name='plot2_baselines.pdf'
             )
             # write baselines
@@ -1323,10 +1494,10 @@ def main():
                 max_values, threshold=3e2
             )
             # plotting flatlined channels for grafana
-            plot_flatline_mask(
-                flatlined, cs, output_name=f'{args.output_dir}/{short_filename}_light_dqm_flatline.png',
-                times = (start_central, end_central)
-            )
+            #plot_flatline_mask(
+            #    flatlined, cs, output_name=f'{args.output_dir}/{short_filename}_light_dqm_flatline.png',
+            #    times = (start_central, end_central)
+            #)
             # plotting flatlined channels
             plot_flatline_mask(
                 flatlined, cs, output_name=f'{args.tmp_dir}/plot0_flatline.pdf',
@@ -1351,10 +1522,10 @@ def main():
             #############################################################
 
             # plotting baseline fluctuations for grafana
-            plot_baseline_mask(
-                baselined, cs, output_name=f'{args.output_dir}/{short_filename}_light_dqm_baseline.png',
-                times = (start_central, end_central)
-            )
+            #plot_baseline_mask(
+            #    baselined, cs, output_name=f'{args.output_dir}/{short_filename}_light_dqm_baseline.png',
+            #    times = (start_central, end_central)
+            #)
             # plotting baseline fluctuations
             plot_baseline_mask(
                 baselined, cs, output_name=f'{args.tmp_dir}/plot0_baseline.pdf',
@@ -1368,7 +1539,7 @@ def main():
                             "Failed to plot baseline fluctuations: plot0_baseline.pdf")
             traceback.print_exc()
 
-
+        print(f"Plots generated for file: {args.output_dir}, now merging PDFs...")
         # search for files in the output directory and merge pdfs
         merger = PdfMerger()
         merger_grafana = PdfMerger()
@@ -1399,18 +1570,24 @@ def main():
         filename_formatted = "\n".join("    " + l for l in filename_lines)
 
         # Build args_list dynamically, avoiding None entries
-        args_list = [f"File index: {i_file}"]
+        #args_list = [f"File index: {i_file}"]
 
         # Add formatted filename lines
         args_list.extend([line for line in filename_lines if line])
 
         args_list.append("")
-        args_list.append(f"Data start timestamp (CT): {start_central}")
-        args_list.append(f"Data end timestamp   (CT): {end_central}")
-        args_list.append(f"DQM runtime          (CT): {time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(time.time() - 21600))}")
+        args_list.append(f"Data start timestamp (CT):   {start_central}")
+        args_list.append(f"Data end timestamp   (CT):   {end_central}")
+        args_list.append(f"DQM runtime          (CT):   {time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(time.time() - 21600))}")
+        args_list.append("")
+        args_list.append(f"Beam Trigger Rate:           {(beam_trigger_rate):.2f} Hz")
+        args_list.append(f"Self Trigger Rate:           {(self_trigger_rate):.2f} Hz")
+        args_list.append(f"HV Instability Rate:         {(max_fprompt_array):.2f} Hz")   
+        args_list.append(f"Minimum DAQ Dead/Reset Time: {(smallest_time_diff):.2f} μs")  
         args_list.append("")
 
         # Add all relevant arguments
+        print('Started Writing Arguments')
         for arg_name in [
             "nfiles", "start_run", "ncomp", "output_dir",
             "units", "ptps16bit", "max_evts", "powspec_nevts"
