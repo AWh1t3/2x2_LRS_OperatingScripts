@@ -1371,10 +1371,10 @@ def main():
 
         # HV instability check:
         low_fprompt_array = get_fprompt_estimate(WVFM_ARRAY=(wvfms - baselines[:, :, :, np.newaxis])/4, ARRIVAL_TICK=77, THRESHOLD=600)
-        max_fprompt_array = (np.sum(low_fprompt_array, axis=0)*MULT) / file_length
+        max_fprompt_array = np.round((low_fprompt_array.sum(axis=0)*MULT)/file_length, 1)
         try:
             #for evt in evts:
-            plot_fprompt_rates(HVINST_ARRAY=low_fprompt_array, FPROMPT_THD=15, FILE_LENGTH=np.round(file_length,2), MULT=MULT, output_name='plot6_hv_instabilities.pdf')
+            plot_fprompt_rates(HVINST_ARRAY=low_fprompt_array, FPROMPT_THD=20, FILE_LENGTH=np.round(file_length,2), MULT=MULT, output_name='plot6_hv_instabilities.pdf')
             print(f"HV Instability Rate plotted for file: {filename}")
         except Exception as e:
 
@@ -1542,35 +1542,47 @@ def main():
         print(f"Plots generated for file: {args.output_dir}, now merging PDFs...")
         # search for files in the output directory and merge pdfs
         merger = PdfMerger()
+        print('a')
         merger_grafana = PdfMerger()
+        print('b')
         # Create a PDF with the arguments, file index, and unix timestamp
         input_path_lines = []
         max_line_length = 40
         input_path = args.input_path
+        print('c')
+        print(f"Input path: {input_path}, length: {len(input_path)}")
         while len(input_path) > max_line_length:
-            split_idx = input_path.rfind('/', 0, max_line_length)
-            if split_idx == -1:
+            split_idx = input_path.rfind('/', 1, max_line_length)
+            if split_idx <= 0:
                 split_idx = max_line_length
             input_path_lines.append(input_path[:split_idx])
+            input_path = input_path[split_idx:].lstrip('/')
+            print('f')
             input_path = input_path[split_idx:]
         input_path_lines.append(input_path)
+        print('g')
         input_path_str = "--input_path \\\n" + "\n".join("    " + l for l in input_path_lines)
-
+        print('h')
         # split filename at '/' closest to the centre
         filename_lines = []
         max_line_length = 60
         filename_str = filename
+        print('i')
         while len(filename_str) > max_line_length:
             split_idx = filename_str.rfind('/', 0, max_line_length)
+            print('j')
             if split_idx == -1:
                 split_idx = max_line_length
+                print('k')
             filename_lines.append(filename_str[:split_idx])
             filename_str = filename_str[split_idx:]
+            print('l')
         filename_lines.append(filename_str)
         filename_formatted = "\n".join("    " + l for l in filename_lines)
+        print('m')
 
         # Build args_list dynamically, avoiding None entries
-        #args_list = [f"File index: {i_file}"]
+        args_list = [f"File index: {i_file}"]
 
         # Add formatted filename lines
         args_list.extend([line for line in filename_lines if line])
@@ -1582,9 +1594,10 @@ def main():
         args_list.append("")
         args_list.append(f"Beam Trigger Rate:           {(beam_trigger_rate):.2f} Hz")
         args_list.append(f"Self Trigger Rate:           {(self_trigger_rate):.2f} Hz")
-        args_list.append(f"HV Instability Rate:         {(max_fprompt_array):.2f} Hz")   
+        args_list.append(f"HV Instability Rate:         {max_fprompt_array} Hz")   
         args_list.append(f"Minimum DAQ Dead/Reset Time: {(smallest_time_diff):.2f} μs")  
         args_list.append("")
+        print('n')
 
         # Add all relevant arguments
         print('Started Writing Arguments')
@@ -1600,7 +1613,7 @@ def main():
         args_pdf = os.path.join(args.output_dir, f"args_list_{i_file}.pdf")
 
         with PdfPages(args_pdf) as pdf:
-            fig, ax = plt.subplots(figsize=(8.5, 6))
+            fig, ax = plt.subplots(figsize=(16, 6))
             ax.axis('off')
             text = "\n".join(args_list)
             ax.text(0.01, 0.99, text, va='top', ha='left', fontsize=12, family='monospace')
